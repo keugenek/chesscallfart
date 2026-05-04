@@ -418,10 +418,12 @@ function attachConnHandlers() {
 
 function attachMediaCallHandlers() {
   mediaCall.on('stream', (stream) => {
-    document.getElementById('remote-video').srcObject = stream;
+    const v = document.getElementById('remote-video');
+    v.srcObject = stream;
+    v.play().catch(() => {});
     document.getElementById('video-placeholder').classList.add('hidden');
   });
-  mediaCall.on('close', () => {});
+  mediaCall.on('close', () => { console.log('media call closed'); });
   mediaCall.on('error', (e) => console.warn('media error', e));
 }
 
@@ -440,14 +442,16 @@ function initPeer() {
     conn = c;
     myColor = 'w';
     attachConnHandlers();
+    getMedia(); // start camera now so it's ready when the media call arrives
   });
 
   // Incoming media call → answer with our stream
   peer.on('call', async (c) => {
-    const stream = await getMedia();
-    c.answer(stream || undefined);
     mediaCall = c;
-    attachMediaCallHandlers();
+    attachMediaCallHandlers(); // attach BEFORE any await so we don't miss the 'stream' event
+    const stream = await getMedia();
+    if (stream) c.answer(stream);
+    else c.answer();
   });
 
   peer.on('error', (e) => {
