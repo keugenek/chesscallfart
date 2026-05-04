@@ -91,6 +91,12 @@
   .clock.low { background: #ffe0e0; border-color: #c33; color: #900; }
   .clock.low.active { box-shadow: 0 0 14px rgba(204, 51, 51, 0.6); }
 
+  /* Win overlay */
+  .win-overlay { position: fixed; inset: 0; pointer-events: none; z-index: 95; display: flex; align-items: center; justify-content: center; gap: 6vw; }
+  .win-icon { font-size: 18vmin; animation: win-spin 0.5s linear infinite; filter: drop-shadow(0 6px 12px rgba(0,0,0,0.4)); }
+  .win-icon.center { font-size: 30vmin; animation-duration: 0.4s; }
+  @keyframes win-spin { from { transform: rotate(0deg) scale(1); } 50% { transform: rotate(180deg) scale(1.15); } to { transform: rotate(360deg) scale(1); } }
+
   /* Game-over modal */
   .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 100; }
   .modal-content { background: #222; border: 1px solid #444; border-radius: 12px; padding: 28px 36px; text-align: center; max-width: 360px; }
@@ -156,6 +162,7 @@
 </main>
 
 <div class="fart-overlay" id="fart-overlay" aria-hidden="true"></div>
+<div class="win-overlay hidden" id="win-overlay" aria-hidden="true"><span class="win-icon">🥇</span><span class="win-icon center">🏆</span><span class="win-icon">🥇</span></div>
 
 <div class="modal hidden" id="game-over-modal">
   <div class="modal-content">
@@ -310,7 +317,7 @@ function checkGameEnd() {
     stopGameClock();
     const loser = game.turn();
     const youLost = loser === myColor;
-    showGameOver(youLost ? 'Ты проиграл! 💨' : 'Шах и мат! Ты выиграл! 🎉', youLost ? 'В следующий раз повезёт.' : 'Хорошая партия.', youLost);
+    showGameOver(youLost ? 'Ты проиграл! 💨' : 'Шах и мат! Ты выиграл! 🎉', youLost ? 'В следующий раз повезёт.' : 'Хорошая партия.', youLost, !youLost);
   } else if (game.isStalemate()) {
     stopGameClock();
     showGameOver('Пат', 'Ничья.', false);
@@ -320,16 +327,25 @@ function checkGameEnd() {
   }
 }
 
-function showGameOver(title, text, fart) {
+function showGameOver(title, text, fart, won) {
   document.getElementById('game-over-title').textContent = title;
   document.getElementById('game-over-text').textContent = text;
   if (fart) {
     playFart();
     showFartCloud();
     setTimeout(() => document.getElementById('game-over-modal').classList.remove('hidden'), 600);
+  } else if (won) {
+    showWinOverlay();
+    setTimeout(() => document.getElementById('game-over-modal').classList.remove('hidden'), 1800);
   } else {
     document.getElementById('game-over-modal').classList.remove('hidden');
   }
+}
+
+function showWinOverlay() {
+  const o = document.getElementById('win-overlay');
+  o.classList.remove('hidden');
+  setTimeout(() => o.classList.add('hidden'), 2500);
 }
 
 function showFartCloud() {
@@ -464,7 +480,8 @@ function handleTimeOut(loserColor) {
   showGameOver(
     youLost ? 'Время вышло! Ты проиграл! 💨' : 'У соперника закончилось время! Ты выиграл! 🎉',
     youLost ? 'В следующий раз повезёт.' : 'Хорошая партия.',
-    youLost
+    youLost,
+    !youLost
   );
 }
 
@@ -666,7 +683,7 @@ function attachConnHandlers() {
     }
     else if (d.type === 'resign') {
       stopGameClock();
-      showGameOver('Соперник сдался 🎉', 'Ты выиграл.', false);
+      showGameOver('Соперник сдался 🎉', 'Ты выиграл.', false, true);
     }
   });
   conn.on('close', () => { setStatus('Соперник отключился'); });
