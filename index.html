@@ -278,6 +278,7 @@ function doMove(from, to, promotion = 'q') {
   const moverColor = game.turn();
   const move = game.move({ from, to, promotion });
   if (!move) return;
+  playMoveSound();
   lastMove = { from, to };
   selected = null;
   legalTargets = [];
@@ -297,6 +298,7 @@ function applyRemoteMove(m) {
   const moverColor = game.turn();
   const move = game.move({ from: m.from, to: m.to, promotion: m.promotion || 'q' });
   if (!move) return;
+  playMoveSound();
   lastMove = { from: m.from, to: m.to };
   switchClockOnMove(moverColor, m.clockMs);
   renderBoard();
@@ -464,6 +466,48 @@ function handleTimeOut(loserColor) {
     youLost ? 'В следующий раз повезёт.' : 'Хорошая партия.',
     youLost
   );
+}
+
+// ---------- Move sound (Web Audio) ----------
+let moveAudioCtx = null;
+function playMoveSound() {
+  try {
+    if (!moveAudioCtx) moveAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = moveAudioCtx;
+    const now = ctx.currentTime;
+    const dur = 0.09;
+
+    // Wooden "thock": short filtered noise burst
+    const samples = Math.floor(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, samples, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < samples; i++) data[i] = (Math.random() * 2 - 1);
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 1400;
+    lp.Q.value = 1.5;
+    const ng = ctx.createGain();
+    ng.gain.setValueAtTime(0.0001, now);
+    ng.gain.exponentialRampToValueAtTime(0.55, now + 0.005);
+    ng.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    noise.connect(lp).connect(ng).connect(ctx.destination);
+
+    // Low click body for the "thunk"
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(220, now);
+    osc.frequency.exponentialRampToValueAtTime(90, now + dur);
+    const og = ctx.createGain();
+    og.gain.setValueAtTime(0.0001, now);
+    og.gain.exponentialRampToValueAtTime(0.4, now + 0.005);
+    og.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    osc.connect(og).connect(ctx.destination);
+
+    noise.start(now); osc.start(now);
+    noise.stop(now + dur); osc.stop(now + dur);
+  } catch (e) { /* ignore */ }
 }
 
 // ---------- Fart synth (Web Audio) ----------
