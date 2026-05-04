@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChessCall — play chess with a video call</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: #e6d8f5; color: #2a1a3a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { padding: 10px 20px; background: #111; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; }
+  header h1 { font-size: 18px; font-weight: 600; }
+  header .status { font-size: 13px; color: #aaa; }
+  main { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; overflow: hidden; }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
+
+  /* Left: chess */
+  .left { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; min-height: 0; }
+  #board { display: grid; grid-template-columns: repeat(8, 1fr); grid-template-rows: repeat(8, 1fr); width: min(80vh, 45vw, 600px); height: min(80vh, 45vw, 600px); flex-shrink: 0; border: 3px solid #444; border-radius: 6px; overflow: hidden; box-shadow: 0 4px 20px rgba(0,0,0,0.5); }
+  @media (max-width: 800px) { #board { width: min(60vh, 90vw, 600px); height: min(60vh, 90vw, 600px); } }
+  .square { display: flex; align-items: center; justify-content: center; font-size: 8vmin; cursor: pointer; user-select: none; position: relative; transition: background 0.1s; }
+  @media (min-width: 800px) { .square { font-size: min(7vh, 7vw); } }
+  .square.light { background: #f0d9b5; }
+  .square.dark  { background: #b58863; }
+  .square.selected { background: #f6f669 !important; }
+  .square.move-target::after { content: ''; position: absolute; width: 30%; height: 30%; background: rgba(0,0,0,0.25); border-radius: 50%; }
+  .square.move-target.has-piece::after { width: 90%; height: 90%; background: transparent; border: 4px solid rgba(0,0,0,0.25); border-radius: 50%; }
+  .square.last-move { box-shadow: inset 0 0 0 4px rgba(255, 255, 100, 0.6); }
+  .square.in-check { background: #ff6b6b !important; }
+  .square .piece { width: 88%; height: 88%; pointer-events: none; user-select: none; -webkit-user-drag: none; }
+
+  .game-info { font-size: 14px; color: #ccc; text-align: center; }
+  .game-info .role { font-weight: 600; }
+  .controls { display: flex; gap: 8px; }
+  button { background: #2a7; color: white; border: none; padding: 8px 14px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 500; }
+  button:hover { background: #3b8; }
+  button.secondary { background: #444; }
+  button.secondary:hover { background: #555; }
+  button:disabled { background: #333; color: #777; cursor: not-allowed; }
+
+  /* Right: video + connection */
+  .right { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .videos { flex: 1; position: relative; background: #000; border-radius: 8px; overflow: hidden; min-height: 200px; }
+  #remote-video { width: 100%; height: 100%; object-fit: cover; background: #000; }
+  #local-video { position: absolute; bottom: 12px; right: 12px; width: 25%; min-width: 120px; max-width: 200px; aspect-ratio: 4/3; object-fit: cover; border: 2px solid #555; border-radius: 4px; background: #222; transform: scaleX(-1); }
+  .video-placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #888; font-size: 14px; pointer-events: none; }
+
+  .connect-panel { background: #222; border: 1px solid #333; border-radius: 8px; padding: 16px; }
+  .connect-panel h2 { font-size: 15px; margin-bottom: 12px; color: #ddd; }
+  .my-code-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .my-code-row label { font-size: 13px; color: #aaa; }
+  .my-code { font-family: monospace; font-size: 16px; background: #111; padding: 6px 10px; border-radius: 4px; color: #6cf; letter-spacing: 1px; user-select: all; }
+  .peer-row { display: flex; gap: 8px; }
+  .peer-row input { flex: 1; background: #111; border: 1px solid #444; color: #eee; padding: 8px 10px; border-radius: 4px; font-family: monospace; font-size: 14px; }
+  .peer-row input:focus { outline: none; border-color: #2a7; }
+  .hint { font-size: 12px; color: #888; margin-top: 8px; }
+  .error { color: #f66; font-size: 13px; margin-top: 8px; }
+  .hidden { display: none !important; }
+
+  /* Game-over modal */
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 100; }
+  .modal-content { background: #222; border: 1px solid #444; border-radius: 12px; padding: 28px 36px; text-align: center; max-width: 360px; }
+  .modal-content h2 { font-size: 28px; margin-bottom: 12px; }
+  .modal-content p { color: #ccc; margin-bottom: 18px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>♞ ChessCall</h1>
+  <div class="status" id="conn-status">Not connected</div>
+</header>
+
+<main>
+  <div class="left">
+    <div class="game-info" id="game-info">Waiting for connection…</div>
+    <div id="board"></div>
+    <div class="controls hidden" id="game-controls">
+      <button class="secondary" id="resign-btn">Resign</button>
+      <button class="secondary" id="newgame-btn">New game</button>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="videos">
+      <video id="remote-video" autoplay playsinline></video>
+      <video id="local-video" autoplay playsinline muted></video>
+      <div class="video-placeholder" id="video-placeholder">Camera will start when you connect</div>
+    </div>
+
+    <div class="connect-panel" id="connect-panel">
+      <h2>Connect with your friend</h2>
+      <div class="my-code-row">
+        <label>Your code:</label>
+        <span class="my-code" id="my-id">loading…</span>
+        <button class="secondary" id="copy-btn">Copy</button>
+      </div>
+      <div class="peer-row">
+        <input id="peer-id" placeholder="Paste friend's code" autocomplete="off" spellcheck="false">
+        <button id="connect-btn">Connect</button>
+      </div>
+      <div class="hint">Share your code with your friend, or paste theirs and click Connect. Whoever connects first plays White.</div>
+      <div class="error hidden" id="error-msg"></div>
+    </div>
+  </div>
+</main>
+
+<div class="modal hidden" id="game-over-modal">
+  <div class="modal-content">
+    <h2 id="game-over-title">Game over</h2>
+    <p id="game-over-text"></p>
+    <button id="play-again-btn">Play again</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script type="module">
+import { Chess } from 'https://cdn.jsdelivr.net/npm/chess.js@1.0.0/+esm';
+
+// ---------- Chess state ----------
+const game = new Chess();
+let myColor = null; // 'w' | 'b'
+let selected = null;
+let legalTargets = [];
+let lastMove = null;
+
+const PIECE_BASE = 'https://cdn.jsdelivr.net/gh/lichess-org/lila@master/public/piece/cburnett/';
+function pieceUrl(color, type) { return `${PIECE_BASE}${color}${type.toUpperCase()}.svg`; }
+
+const boardEl = document.getElementById('board');
+const gameInfoEl = document.getElementById('game-info');
+
+function renderBoard() {
+  boardEl.innerHTML = '';
+  const board = game.board();
+  const flip = myColor === 'b';
+  const checkSquare = game.inCheck() ? findKing(game.turn()) : null;
+
+  for (let row = 0; row < 8; row++) {
+    for (let col = 0; col < 8; col++) {
+      const r = flip ? 7 - row : row;
+      const c = flip ? 7 - col : col;
+      const square = String.fromCharCode(97 + c) + (8 - r);
+      const piece = board[r][c];
+      const sq = document.createElement('div');
+      sq.className = 'square ' + ((r + c) % 2 === 0 ? 'light' : 'dark');
+      sq.dataset.square = square;
+      if (piece) {
+        const img = document.createElement('img');
+        img.className = 'piece';
+        img.src = pieceUrl(piece.color, piece.type);
+        img.draggable = false;
+        img.alt = piece.color + piece.type;
+        sq.appendChild(img);
+      }
+      if (selected === square) sq.classList.add('selected');
+      if (legalTargets.includes(square)) {
+        sq.classList.add('move-target');
+        if (piece) sq.classList.add('has-piece');
+      }
+      if (lastMove && (lastMove.from === square || lastMove.to === square)) sq.classList.add('last-move');
+      if (checkSquare === square) sq.classList.add('in-check');
+      sq.addEventListener('click', onSquareClick);
+      boardEl.appendChild(sq);
+    }
+  }
+  updateInfo();
+}
+
+function findKing(color) {
+  const board = game.board();
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const p = board[r][c];
+    if (p && p.color === color && p.type === 'k') return String.fromCharCode(97 + c) + (8 - r);
+  }
+  return null;
+}
+
+function updateInfo() {
+  if (!myColor) { gameInfoEl.textContent = 'Waiting for connection…'; return; }
+  const youAre = myColor === 'w' ? 'White' : 'Black';
+  const turn = game.turn() === 'w' ? 'White' : 'Black';
+  const yours = game.turn() === myColor ? '— your move' : '— opponent\'s move';
+  gameInfoEl.innerHTML = `You are <span class="role">${youAre}</span>. ${turn} to move ${yours}.`;
+}
+
+function onSquareClick(e) {
+  if (!myColor) return;
+  if (game.isGameOver()) return;
+  if (game.turn() !== myColor) return;
+  const square = e.currentTarget.dataset.square;
+  const piece = game.get(square);
+
+  if (selected) {
+    if (legalTargets.includes(square)) {
+      doMove(selected, square);
+      return;
+    }
+    if (piece && piece.color === myColor) {
+      selectSquare(square);
+      return;
+    }
+    selected = null;
+    legalTargets = [];
+    renderBoard();
+    return;
+  }
+  if (piece && piece.color === myColor) selectSquare(square);
+}
+
+function selectSquare(square) {
+  selected = square;
+  legalTargets = game.moves({ square, verbose: true }).map(m => m.to);
+  renderBoard();
+}
+
+function doMove(from, to, promotion = 'q') {
+  const move = game.move({ from, to, promotion });
+  if (!move) return;
+  lastMove = { from, to };
+  selected = null;
+  legalTargets = [];
+  renderBoard();
+  if (conn && conn.open) conn.send({ type: 'move', from, to, promotion });
+  checkGameEnd();
+}
+
+function applyRemoteMove(m) {
+  const move = game.move({ from: m.from, to: m.to, promotion: m.promotion || 'q' });
+  if (!move) return;
+  lastMove = { from: m.from, to: m.to };
+  renderBoard();
+  checkGameEnd();
+}
+
+function checkGameEnd() {
+  if (game.isCheckmate()) {
+    const loser = game.turn();
+    const youLost = loser === myColor;
+    showGameOver(youLost ? 'You lost! / Ты проиграл! 💨' : 'Checkmate! You won! 🎉', youLost ? 'Better luck next time. / Повезёт в следующий раз.' : 'Nicely played.', youLost);
+  } else if (game.isStalemate()) {
+    showGameOver('Stalemate', 'Game drawn.', false);
+  } else if (game.isDraw()) {
+    showGameOver('Draw', 'Game drawn.', false);
+  }
+}
+
+function showGameOver(title, text, fart) {
+  document.getElementById('game-over-title').textContent = title;
+  document.getElementById('game-over-text').textContent = text;
+  document.getElementById('game-over-modal').classList.remove('hidden');
+  if (fart) playFart();
+}
+
+function newGame(broadcast = true) {
+  game.reset();
+  selected = null;
+  legalTargets = [];
+  lastMove = null;
+  // Swap colors on rematch
+  if (broadcast && myColor) {
+    myColor = myColor === 'w' ? 'b' : 'w';
+    if (conn && conn.open) conn.send({ type: 'newgame', yourColor: myColor === 'w' ? 'b' : 'w' });
+  }
+  document.getElementById('game-over-modal').classList.add('hidden');
+  renderBoard();
+}
+
+// ---------- Fart synth (Web Audio) ----------
+function playFart() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const master = ctx.createGain();
+    master.gain.value = 0.9;
+    master.connect(ctx.destination);
+
+    // A fart is a series of sputtering bursts. Schedule a few overlapping ones.
+    const bursts = [
+      { t: 0.00, dur: 0.55, f0: 160, f1: 70,  wob: 28, wobF: 24, vol: 0.55 },
+      { t: 0.18, dur: 0.40, f0: 130, f1: 60,  wob: 35, wobF: 19, vol: 0.45 },
+      { t: 0.42, dur: 0.35, f0: 110, f1: 50,  wob: 42, wobF: 16, vol: 0.40 },
+      { t: 0.70, dur: 0.50, f0: 95,  f1: 45,  wob: 50, wobF: 13, vol: 0.50 }
+    ];
+
+    const totalDur = 1.4;
+    const startNow = ctx.currentTime;
+
+    for (const b of bursts) {
+      const start = startNow + b.t;
+      const end = start + b.dur;
+
+      // Pitched buzz (sawtooth, descending)
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(b.f0, start);
+      osc.frequency.exponentialRampToValueAtTime(b.f1, end);
+
+      // Wobble LFO modulating pitch (the flappy bit)
+      const lfo = ctx.createOscillator();
+      lfo.type = 'sine';
+      lfo.frequency.value = b.wobF;
+      const lfoGain = ctx.createGain();
+      lfoGain.gain.value = b.wob;
+      lfo.connect(lfoGain).connect(osc.frequency);
+
+      // Lowpass for that wet, muffled quality
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(1100, start);
+      lp.frequency.exponentialRampToValueAtTime(280, end);
+      lp.Q.value = 6;
+
+      // Envelope: punchy attack, decay
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(b.vol, start + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001, end);
+
+      osc.connect(lp).connect(gain).connect(master);
+
+      // Noise layer for the spluttering air
+      const samples = Math.floor(ctx.sampleRate * b.dur);
+      const noiseBuf = ctx.createBuffer(1, samples, ctx.sampleRate);
+      const data = noiseBuf.getChannelData(0);
+      for (let i = 0; i < samples; i++) {
+        // Amplitude-modulated noise so it sputters
+        const t = i / ctx.sampleRate;
+        const am = 0.6 + 0.4 * Math.sin(2 * Math.PI * b.wobF * 1.7 * t);
+        data[i] = (Math.random() * 2 - 1) * am;
+      }
+      const noise = ctx.createBufferSource();
+      noise.buffer = noiseBuf;
+      const noiseBp = ctx.createBiquadFilter();
+      noiseBp.type = 'bandpass';
+      noiseBp.frequency.value = 350;
+      noiseBp.Q.value = 1.2;
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.0001, start);
+      noiseGain.gain.exponentialRampToValueAtTime(b.vol * 0.7, start + 0.02);
+      noiseGain.gain.exponentialRampToValueAtTime(0.0001, end);
+      noise.connect(noiseBp).connect(noiseGain).connect(master);
+
+      osc.start(start); lfo.start(start); noise.start(start);
+      osc.stop(end); lfo.stop(end); noise.stop(end);
+    }
+
+    setTimeout(() => ctx.close(), (totalDur + 0.3) * 1000);
+  } catch (e) { console.warn('fart failed', e); }
+}
+
+// ---------- WebRTC / PeerJS ----------
+let peer = null;
+let conn = null;
+let mediaCall = null;
+let localStream = null;
+
+const ICE_SERVERS = [
+  { urls: 'stun:stun.cloudflare.com:3478' },
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:global.stun.twilio.com:3478' },
+  { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+  { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+];
+
+function makeShortId() {
+  // 6-char human-friendly id
+  const chars = 'abcdefghijkmnpqrstuvwxyz23456789';
+  let s = '';
+  for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
+  return 'cc-' + s;
+}
+
+function setStatus(text) { document.getElementById('conn-status').textContent = text; }
+function setError(text) {
+  const el = document.getElementById('error-msg');
+  if (text) { el.textContent = text; el.classList.remove('hidden'); }
+  else el.classList.add('hidden');
+}
+
+async function getMedia() {
+  if (localStream) return localStream;
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    document.getElementById('local-video').srcObject = localStream;
+    document.getElementById('video-placeholder').classList.add('hidden');
+    return localStream;
+  } catch (e) {
+    setError('Camera/mic blocked: ' + e.message + '. The chess board still works without video.');
+    return null;
+  }
+}
+
+function attachConnHandlers() {
+  conn.on('open', () => {
+    setStatus('Connected');
+    document.getElementById('connect-panel').classList.add('hidden');
+    document.getElementById('game-controls').classList.remove('hidden');
+    renderBoard();
+  });
+  conn.on('data', (d) => {
+    if (!d || !d.type) return;
+    if (d.type === 'move') applyRemoteMove(d);
+    else if (d.type === 'newgame') {
+      game.reset();
+      selected = null; legalTargets = []; lastMove = null;
+      myColor = d.yourColor;
+      document.getElementById('game-over-modal').classList.add('hidden');
+      renderBoard();
+    }
+    else if (d.type === 'resign') {
+      showGameOver('Opponent resigned 🎉', 'You win.', false);
+    }
+  });
+  conn.on('close', () => { setStatus('Opponent disconnected'); });
+  conn.on('error', (e) => { setError('Connection error: ' + e); });
+}
+
+function attachMediaCallHandlers() {
+  mediaCall.on('stream', (stream) => {
+    document.getElementById('remote-video').srcObject = stream;
+    document.getElementById('video-placeholder').classList.add('hidden');
+  });
+  mediaCall.on('close', () => {});
+  mediaCall.on('error', (e) => console.warn('media error', e));
+}
+
+function initPeer() {
+  setStatus('Getting your code…');
+  peer = new Peer(makeShortId(), { config: { iceServers: ICE_SERVERS }, debug: 1 });
+
+  peer.on('open', (id) => {
+    document.getElementById('my-id').textContent = id;
+    setStatus('Ready — share your code');
+  });
+
+  // Incoming data connection (we are the host → we play White)
+  peer.on('connection', (c) => {
+    if (conn && conn.open) { c.close(); return; }
+    conn = c;
+    myColor = 'w';
+    attachConnHandlers();
+  });
+
+  // Incoming media call → answer with our stream
+  peer.on('call', async (c) => {
+    const stream = await getMedia();
+    c.answer(stream || undefined);
+    mediaCall = c;
+    attachMediaCallHandlers();
+  });
+
+  peer.on('error', (e) => {
+    console.error('peer error', e);
+    if (e.type === 'peer-unavailable') setError('No one is using that code right now. Double-check it.');
+    else if (e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error' || e.type === 'disconnected') {
+      setError('Signaling server unreachable. Retrying in 3 s…');
+      setTimeout(() => { try { peer.reconnect(); } catch(_){} }, 3000);
+    } else setError('Error: ' + e.type);
+  });
+}
+
+async function connectToPeer() {
+  const target = document.getElementById('peer-id').value.trim().toLowerCase();
+  if (!target) return;
+  setError('');
+  setStatus('Connecting…');
+  await getMedia();
+
+  conn = peer.connect(target, { reliable: true });
+  myColor = 'b';
+  attachConnHandlers();
+
+  if (localStream) {
+    mediaCall = peer.call(target, localStream);
+    attachMediaCallHandlers();
+  }
+}
+
+// ---------- UI wiring ----------
+document.getElementById('connect-btn').addEventListener('click', connectToPeer);
+document.getElementById('peer-id').addEventListener('keydown', (e) => { if (e.key === 'Enter') connectToPeer(); });
+document.getElementById('copy-btn').addEventListener('click', async () => {
+  const id = document.getElementById('my-id').textContent;
+  try { await navigator.clipboard.writeText(id); document.getElementById('copy-btn').textContent = 'Copied!'; setTimeout(() => document.getElementById('copy-btn').textContent = 'Copy', 1500); } catch(_) {}
+});
+document.getElementById('newgame-btn').addEventListener('click', () => newGame(true));
+document.getElementById('play-again-btn').addEventListener('click', () => newGame(true));
+document.getElementById('resign-btn').addEventListener('click', () => {
+  if (!conn || !conn.open) return;
+  if (!confirm('Resign the game?')) return;
+  conn.send({ type: 'resign' });
+  showGameOver('You resigned 💨', 'Better luck next time.', true);
+});
+
+// Initialize
+renderBoard();
+initPeer();
+</script>
+</body>
+</html>
