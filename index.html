@@ -71,6 +71,26 @@
   .fart-blob.b3 { background: radial-gradient(circle, #c1f07a 0%, #7dbf3a 60%, transparent 80%); }
   .fart-blob.b4 { background: radial-gradient(circle, #5fbf2a 0%, #2f7a18 60%, transparent 80%); }
 
+  /* Time control selector */
+  .time-control { margin-bottom: 12px; padding: 10px; background: #f3eafa; border-radius: 6px; }
+  .time-control > label { display: block; font-size: 13px; color: #4a3060; margin-bottom: 8px; font-weight: 500; }
+  .time-options { display: flex; gap: 6px; flex-wrap: wrap; }
+  .tc-btn { background: #d4c2ec; color: #2a1a3a; border: 2px solid transparent; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 500; }
+  .tc-btn:hover { background: #c2acdf; }
+  .tc-btn.active { background: #6a3fb5; border-color: #4a2880; color: #fff; }
+  .custom-time { margin-top: 8px; display: flex; align-items: center; gap: 6px; font-size: 13px; color: #4a3060; }
+  .custom-time input { width: 70px; background: #fff; border: 1px solid #b89dd6; color: #2a1a3a; padding: 4px 8px; border-radius: 4px; font-size: 13px; }
+  .custom-time input:focus { outline: none; border-color: #6a3fb5; }
+
+  /* Chess clocks */
+  .clocks { display: flex; justify-content: space-between; width: min(80vh, 45vw, 600px); gap: 8px; }
+  @media (max-width: 800px) { .clocks { width: min(60vh, 90vw, 600px); } }
+  .clock { font-family: 'Courier New', monospace; font-size: 22px; font-weight: bold; padding: 8px 18px; background: #fff; border: 2px solid #888; border-radius: 6px; min-width: 110px; text-align: center; color: #333; transition: box-shadow 0.15s, background 0.15s, border-color 0.15s; }
+  .clock-label { font-size: 11px; font-weight: normal; color: #666; display: block; margin-bottom: 2px; }
+  .clock.active { border-color: #4caf3c; background: #e9f7e3; box-shadow: 0 0 14px rgba(76, 175, 60, 0.55); }
+  .clock.low { background: #ffe0e0; border-color: #c33; color: #900; }
+  .clock.low.active { box-shadow: 0 0 14px rgba(204, 51, 51, 0.6); }
+
   /* Game-over modal */
   .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; align-items: center; justify-content: center; z-index: 100; }
   .modal-content { background: #222; border: 1px solid #444; border-radius: 12px; padding: 28px 36px; text-align: center; max-width: 360px; }
@@ -88,7 +108,9 @@
 <main>
   <div class="left">
     <div class="game-info" id="game-info">Ожидание подключения…</div>
+    <div class="clocks hidden" id="clocks-top"><div class="clock" id="clock-opponent"><span class="clock-label">Соперник</span><span id="clock-opponent-time">—</span></div><div style="flex:1"></div></div>
     <div id="board"></div>
+    <div class="clocks hidden" id="clocks-bottom"><div style="flex:1"></div><div class="clock" id="clock-self"><span class="clock-label">Ты</span><span id="clock-self-time">—</span></div></div>
     <div class="controls hidden" id="game-controls">
       <button class="secondary" id="resign-btn">Сдаться</button>
       <button class="secondary" id="newgame-btn">Новая партия</button>
@@ -104,6 +126,20 @@
 
     <div class="connect-panel" id="connect-panel">
       <h2>Подключись к другу</h2>
+      <div class="time-control">
+        <label>Время на партию:</label>
+        <div class="time-options">
+          <button type="button" class="tc-btn" data-tc="5">5 мин</button>
+          <button type="button" class="tc-btn active" data-tc="10">10 мин</button>
+          <button type="button" class="tc-btn" data-tc="20">20 мин</button>
+          <button type="button" class="tc-btn" data-tc="custom">Свой</button>
+          <button type="button" class="tc-btn" data-tc="0">Без часов</button>
+        </div>
+        <div class="custom-time hidden" id="custom-time-row">
+          <input type="number" id="custom-minutes" min="1" max="180" value="15">
+          <span>мин</span>
+        </div>
+      </div>
       <div class="my-code-row">
         <label>Твой код:</label>
         <span class="my-code" id="my-id">загрузка…</span>
@@ -139,6 +175,14 @@ let myColor = null; // 'w' | 'b'
 let selected = null;
 let legalTargets = [];
 let lastMove = null;
+
+// ---------- Clock state ----------
+let selectedTcMs = 10 * 60 * 1000;       // chosen in UI before connect
+let timeControlMs = 10 * 60 * 1000;       // active time-control for the game
+let clocks = { w: 0, b: 0 };
+let activeClockColor = null;              // 'w' | 'b' | null
+let clockInterval = null;
+let lastTickAt = 0;
 
 const PIECE_BASE = 'https://cdn.jsdelivr.net/gh/lichess-org/lila@master/public/piece/cburnett/';
 function pieceUrl(color, type) { return `${PIECE_BASE}${color}${type.toUpperCase()}.svg`; }
@@ -231,32 +275,45 @@ function selectSquare(square) {
 }
 
 function doMove(from, to, promotion = 'q') {
+  const moverColor = game.turn();
   const move = game.move({ from, to, promotion });
   if (!move) return;
   lastMove = { from, to };
   selected = null;
   legalTargets = [];
+  // Update clock: subtract elapsed from mover, then switch
+  if (timeControlMs > 0 && activeClockColor) {
+    const now = Date.now();
+    clocks[activeClockColor] = Math.max(0, clocks[activeClockColor] - (now - lastTickAt));
+    lastTickAt = now;
+  }
+  switchClockOnMove(moverColor, clocks[moverColor]);
   renderBoard();
-  if (conn && conn.open) conn.send({ type: 'move', from, to, promotion });
+  if (conn && conn.open) conn.send({ type: 'move', from, to, promotion, clockMs: clocks[moverColor] });
   checkGameEnd();
 }
 
 function applyRemoteMove(m) {
+  const moverColor = game.turn();
   const move = game.move({ from: m.from, to: m.to, promotion: m.promotion || 'q' });
   if (!move) return;
   lastMove = { from: m.from, to: m.to };
+  switchClockOnMove(moverColor, m.clockMs);
   renderBoard();
   checkGameEnd();
 }
 
 function checkGameEnd() {
   if (game.isCheckmate()) {
+    stopGameClock();
     const loser = game.turn();
     const youLost = loser === myColor;
     showGameOver(youLost ? 'Ты проиграл! 💨' : 'Шах и мат! Ты выиграл! 🎉', youLost ? 'В следующий раз повезёт.' : 'Хорошая партия.', youLost);
   } else if (game.isStalemate()) {
+    stopGameClock();
     showGameOver('Пат', 'Ничья.', false);
   } else if (game.isDraw()) {
+    stopGameClock();
     showGameOver('Ничья', 'Ничья.', false);
   }
 }
@@ -326,10 +383,87 @@ function newGame(broadcast = true) {
   // Swap colors on rematch
   if (broadcast && myColor) {
     myColor = myColor === 'w' ? 'b' : 'w';
-    if (conn && conn.open) conn.send({ type: 'newgame', yourColor: myColor === 'w' ? 'b' : 'w' });
+    if (conn && conn.open) conn.send({ type: 'newgame', yourColor: myColor === 'w' ? 'b' : 'w', timeMs: timeControlMs });
   }
   document.getElementById('game-over-modal').classList.add('hidden');
+  startGameClock();
   renderBoard();
+}
+
+// ---------- Clock logic ----------
+function formatTime(ms) {
+  if (ms < 0) ms = 0;
+  const total = Math.ceil(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return m + ':' + String(s).padStart(2, '0');
+}
+
+function startGameClock() {
+  stopGameClock();
+  if (timeControlMs <= 0) {
+    document.getElementById('clocks-top').classList.add('hidden');
+    document.getElementById('clocks-bottom').classList.add('hidden');
+    return;
+  }
+  clocks = { w: timeControlMs, b: timeControlMs };
+  activeClockColor = 'w';
+  lastTickAt = Date.now();
+  document.getElementById('clocks-top').classList.remove('hidden');
+  document.getElementById('clocks-bottom').classList.remove('hidden');
+  renderClocks();
+  clockInterval = setInterval(tickClock, 200);
+}
+
+function stopGameClock() {
+  if (clockInterval) { clearInterval(clockInterval); clockInterval = null; }
+  activeClockColor = null;
+}
+
+function tickClock() {
+  if (!activeClockColor || timeControlMs <= 0) return;
+  const now = Date.now();
+  const elapsed = now - lastTickAt;
+  lastTickAt = now;
+  clocks[activeClockColor] = Math.max(0, clocks[activeClockColor] - elapsed);
+  renderClocks();
+  if (clocks[activeClockColor] <= 0) handleTimeOut(activeClockColor);
+}
+
+function switchClockOnMove(senderColor, senderClockMs) {
+  if (timeControlMs <= 0) return;
+  const now = Date.now();
+  if (activeClockColor) {
+    const elapsed = now - lastTickAt;
+    clocks[activeClockColor] = Math.max(0, clocks[activeClockColor] - elapsed);
+  }
+  if (typeof senderClockMs === 'number') clocks[senderColor] = Math.max(0, senderClockMs);
+  activeClockColor = senderColor === 'w' ? 'b' : 'w';
+  lastTickAt = now;
+  renderClocks();
+}
+
+function renderClocks() {
+  if (!myColor || timeControlMs <= 0) return;
+  const oppColor = myColor === 'w' ? 'b' : 'w';
+  const oppEl = document.getElementById('clock-opponent');
+  const selfEl = document.getElementById('clock-self');
+  document.getElementById('clock-opponent-time').textContent = formatTime(clocks[oppColor]);
+  document.getElementById('clock-self-time').textContent = formatTime(clocks[myColor]);
+  oppEl.classList.toggle('active', activeClockColor === oppColor);
+  selfEl.classList.toggle('active', activeClockColor === myColor);
+  oppEl.classList.toggle('low', clocks[oppColor] < 30000);
+  selfEl.classList.toggle('low', clocks[myColor] < 30000);
+}
+
+function handleTimeOut(loserColor) {
+  stopGameClock();
+  const youLost = loserColor === myColor;
+  showGameOver(
+    youLost ? 'Время вышло! Ты проиграл! 💨' : 'У соперника закончилось время! Ты выиграл! 🎉',
+    youLost ? 'В следующий раз повезёт.' : 'Хорошая партия.',
+    youLost
+  );
 }
 
 // ---------- Fart synth (Web Audio) ----------
@@ -462,19 +596,32 @@ function attachConnHandlers() {
     setStatus('Подключено');
     document.getElementById('connect-panel').classList.add('hidden');
     document.getElementById('game-controls').classList.remove('hidden');
+    // Host (White) authoritatively sets time control and broadcasts it
+    if (myColor === 'w') {
+      timeControlMs = selectedTcMs;
+      conn.send({ type: 'config', timeMs: timeControlMs });
+      startGameClock();
+    }
     renderBoard();
   });
   conn.on('data', (d) => {
     if (!d || !d.type) return;
     if (d.type === 'move') applyRemoteMove(d);
+    else if (d.type === 'config') {
+      timeControlMs = d.timeMs || 0;
+      startGameClock();
+    }
     else if (d.type === 'newgame') {
       game.reset();
       selected = null; legalTargets = []; lastMove = null;
       myColor = d.yourColor;
+      if (typeof d.timeMs === 'number') timeControlMs = d.timeMs;
       document.getElementById('game-over-modal').classList.add('hidden');
+      startGameClock();
       renderBoard();
     }
     else if (d.type === 'resign') {
+      stopGameClock();
       showGameOver('Соперник сдался 🎉', 'Ты выиграл.', false);
     }
   });
@@ -560,7 +707,28 @@ document.getElementById('resign-btn').addEventListener('click', () => {
   if (!conn || !conn.open) return;
   if (!confirm('Сдаться?')) return;
   conn.send({ type: 'resign' });
+  stopGameClock();
   showGameOver('Ты сдался 💨', 'В следующий раз повезёт.', true);
+});
+
+// Time-control picker wiring
+function applySelectedTc(btn) {
+  const v = btn.dataset.tc;
+  document.querySelectorAll('.tc-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (v === 'custom') {
+    document.getElementById('custom-time-row').classList.remove('hidden');
+    const m = parseInt(document.getElementById('custom-minutes').value, 10);
+    selectedTcMs = (m > 0 ? m : 15) * 60 * 1000;
+  } else {
+    document.getElementById('custom-time-row').classList.add('hidden');
+    selectedTcMs = parseInt(v, 10) * 60 * 1000;
+  }
+}
+document.querySelectorAll('.tc-btn').forEach(btn => btn.addEventListener('click', () => applySelectedTc(btn)));
+document.getElementById('custom-minutes').addEventListener('input', (e) => {
+  const m = parseInt(e.target.value, 10);
+  if (m > 0) selectedTcMs = m * 60 * 1000;
 });
 
 // Initialize
