@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ChessCall — play chess with a video call</title>
+<title>ChessCall — шахматы с видеосвязью</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; background: #e6d8f5; color: #2a1a3a; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -82,16 +82,16 @@
 
 <header>
   <h1>♞ ChessCall</h1>
-  <div class="status" id="conn-status">Not connected</div>
+  <div class="status" id="conn-status">Нет подключения</div>
 </header>
 
 <main>
   <div class="left">
-    <div class="game-info" id="game-info">Waiting for connection…</div>
+    <div class="game-info" id="game-info">Ожидание подключения…</div>
     <div id="board"></div>
     <div class="controls hidden" id="game-controls">
-      <button class="secondary" id="resign-btn">Resign</button>
-      <button class="secondary" id="newgame-btn">New game</button>
+      <button class="secondary" id="resign-btn">Сдаться</button>
+      <button class="secondary" id="newgame-btn">Новая партия</button>
     </div>
   </div>
 
@@ -99,21 +99,21 @@
     <div class="videos">
       <video id="remote-video" autoplay playsinline></video>
       <video id="local-video" autoplay playsinline muted></video>
-      <div class="video-placeholder" id="video-placeholder">Camera will start when you connect</div>
+      <div class="video-placeholder" id="video-placeholder">Камера включится после подключения</div>
     </div>
 
     <div class="connect-panel" id="connect-panel">
-      <h2>Connect with your friend</h2>
+      <h2>Подключись к другу</h2>
       <div class="my-code-row">
-        <label>Your code:</label>
-        <span class="my-code" id="my-id">loading…</span>
-        <button class="secondary" id="copy-btn">Copy</button>
+        <label>Твой код:</label>
+        <span class="my-code" id="my-id">загрузка…</span>
+        <button class="secondary" id="copy-btn">Копировать</button>
       </div>
       <div class="peer-row">
-        <input id="peer-id" placeholder="Paste friend's code" autocomplete="off" spellcheck="false">
-        <button id="connect-btn">Connect</button>
+        <input id="peer-id" placeholder="Вставь код друга" autocomplete="off" spellcheck="false">
+        <button id="connect-btn">Подключиться</button>
       </div>
-      <div class="hint">Share your code with your friend, or paste theirs and click Connect. Whoever connects first plays White.</div>
+      <div class="hint">Поделись своим кодом с другом или вставь его код и нажми «Подключиться». Тот, кто подключился первым, играет белыми.</div>
       <div class="error hidden" id="error-msg"></div>
     </div>
   </div>
@@ -123,9 +123,9 @@
 
 <div class="modal hidden" id="game-over-modal">
   <div class="modal-content">
-    <h2 id="game-over-title">Game over</h2>
+    <h2 id="game-over-title">Игра окончена</h2>
     <p id="game-over-text"></p>
-    <button id="play-again-btn">Play again</button>
+    <button id="play-again-btn">Сыграть ещё раз</button>
   </div>
 </div>
 
@@ -193,11 +193,11 @@ function findKing(color) {
 }
 
 function updateInfo() {
-  if (!myColor) { gameInfoEl.textContent = 'Waiting for connection…'; return; }
-  const youAre = myColor === 'w' ? 'White' : 'Black';
-  const turn = game.turn() === 'w' ? 'White' : 'Black';
-  const yours = game.turn() === myColor ? '— your move' : '— opponent\'s move';
-  gameInfoEl.innerHTML = `You are <span class="role">${youAre}</span>. ${turn} to move ${yours}.`;
+  if (!myColor) { gameInfoEl.textContent = 'Ожидание подключения…'; return; }
+  const youAre = myColor === 'w' ? 'белыми' : 'чёрными';
+  const turnNom = game.turn() === 'w' ? 'Белые' : 'Чёрные';
+  const yours = game.turn() === myColor ? '— твой ход' : '— ход соперника';
+  gameInfoEl.innerHTML = `Ты играешь <span class="role">${youAre}</span>. ${turnNom} ходят ${yours}.`;
 }
 
 function onSquareClick(e) {
@@ -253,11 +253,11 @@ function checkGameEnd() {
   if (game.isCheckmate()) {
     const loser = game.turn();
     const youLost = loser === myColor;
-    showGameOver(youLost ? 'You lost! / Ты проиграл! 💨' : 'Checkmate! You won! 🎉', youLost ? 'Better luck next time. / Повезёт в следующий раз.' : 'Nicely played.', youLost);
+    showGameOver(youLost ? 'Ты проиграл! 💨' : 'Шах и мат! Ты выиграл! 🎉', youLost ? 'В следующий раз повезёт.' : 'Хорошая партия.', youLost);
   } else if (game.isStalemate()) {
-    showGameOver('Stalemate', 'Game drawn.', false);
+    showGameOver('Пат', 'Ничья.', false);
   } else if (game.isDraw()) {
-    showGameOver('Draw', 'Game drawn.', false);
+    showGameOver('Ничья', 'Ничья.', false);
   }
 }
 
@@ -452,14 +452,14 @@ async function getMedia() {
     document.getElementById('video-placeholder').classList.add('hidden');
     return localStream;
   } catch (e) {
-    setError('Camera/mic blocked: ' + e.message + '. The chess board still works without video.');
+    setError('Камера/микрофон заблокированы: ' + e.message + '. Шахматная доска работает и без видео.');
     return null;
   }
 }
 
 function attachConnHandlers() {
   conn.on('open', () => {
-    setStatus('Connected');
+    setStatus('Подключено');
     document.getElementById('connect-panel').classList.add('hidden');
     document.getElementById('game-controls').classList.remove('hidden');
     renderBoard();
@@ -475,11 +475,11 @@ function attachConnHandlers() {
       renderBoard();
     }
     else if (d.type === 'resign') {
-      showGameOver('Opponent resigned 🎉', 'You win.', false);
+      showGameOver('Соперник сдался 🎉', 'Ты выиграл.', false);
     }
   });
-  conn.on('close', () => { setStatus('Opponent disconnected'); });
-  conn.on('error', (e) => { setError('Connection error: ' + e); });
+  conn.on('close', () => { setStatus('Соперник отключился'); });
+  conn.on('error', (e) => { setError('Ошибка соединения: ' + e); });
 }
 
 function attachMediaCallHandlers() {
@@ -494,12 +494,12 @@ function attachMediaCallHandlers() {
 }
 
 function initPeer() {
-  setStatus('Getting your code…');
+  setStatus('Получаем твой код…');
   peer = new Peer(makeShortId(), { config: { iceServers: ICE_SERVERS }, debug: 1 });
 
   peer.on('open', (id) => {
     document.getElementById('my-id').textContent = id;
-    setStatus('Ready — share your code');
+    setStatus('Готово — поделись кодом');
   });
 
   // Incoming data connection (we are the host → we play White)
@@ -522,11 +522,11 @@ function initPeer() {
 
   peer.on('error', (e) => {
     console.error('peer error', e);
-    if (e.type === 'peer-unavailable') setError('No one is using that code right now. Double-check it.');
+    if (e.type === 'peer-unavailable') setError('Никто не использует этот код. Проверь его ещё раз.');
     else if (e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error' || e.type === 'disconnected') {
-      setError('Signaling server unreachable. Retrying in 3 s…');
+      setError('Сервер недоступен. Повтор через 3 с…');
       setTimeout(() => { try { peer.reconnect(); } catch(_){} }, 3000);
-    } else setError('Error: ' + e.type);
+    } else setError('Ошибка: ' + e.type);
   });
 }
 
@@ -534,7 +534,7 @@ async function connectToPeer() {
   const target = document.getElementById('peer-id').value.trim().toLowerCase();
   if (!target) return;
   setError('');
-  setStatus('Connecting…');
+  setStatus('Подключение…');
   await getMedia();
 
   conn = peer.connect(target, { reliable: true });
@@ -552,15 +552,15 @@ document.getElementById('connect-btn').addEventListener('click', connectToPeer);
 document.getElementById('peer-id').addEventListener('keydown', (e) => { if (e.key === 'Enter') connectToPeer(); });
 document.getElementById('copy-btn').addEventListener('click', async () => {
   const id = document.getElementById('my-id').textContent;
-  try { await navigator.clipboard.writeText(id); document.getElementById('copy-btn').textContent = 'Copied!'; setTimeout(() => document.getElementById('copy-btn').textContent = 'Copy', 1500); } catch(_) {}
+  try { await navigator.clipboard.writeText(id); document.getElementById('copy-btn').textContent = 'Скопировано!'; setTimeout(() => document.getElementById('copy-btn').textContent = 'Копировать', 1500); } catch(_) {}
 });
 document.getElementById('newgame-btn').addEventListener('click', () => newGame(true));
 document.getElementById('play-again-btn').addEventListener('click', () => newGame(true));
 document.getElementById('resign-btn').addEventListener('click', () => {
   if (!conn || !conn.open) return;
-  if (!confirm('Resign the game?')) return;
+  if (!confirm('Сдаться?')) return;
   conn.send({ type: 'resign' });
-  showGameOver('You resigned 💨', 'Better luck next time.', true);
+  showGameOver('Ты сдался 💨', 'В следующий раз повезёт.', true);
 });
 
 // Initialize
