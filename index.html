@@ -147,15 +147,11 @@
         </div>
       </div>
       <div class="my-code-row">
-        <label>Твой код:</label>
-        <span class="my-code" id="my-id">загрузка…</span>
-        <button class="secondary" id="copy-btn">Копировать</button>
+        <label>Твоя ссылка:</label>
+        <span class="my-code" id="my-link">загрузка…</span>
+        <button id="copy-btn">Копировать ссылку</button>
       </div>
-      <div class="peer-row">
-        <input id="peer-id" placeholder="Вставь код друга" autocomplete="off" spellcheck="false">
-        <button id="connect-btn">Подключиться</button>
-      </div>
-      <div class="hint">Поделись своим кодом с другом или вставь его код и нажми «Подключиться». Тот, кто подключился первым, играет белыми.</div>
+      <div class="hint">Отправь эту ссылку другу — он откроет её, и игра начнётся автоматически. Тот, кто отправил ссылку, играет белыми.</div>
       <div class="error hidden" id="error-msg"></div>
     </div>
   </div>
@@ -706,8 +702,15 @@ function initPeer() {
   peer = new Peer(makeShortId(), { config: { iceServers: ICE_SERVERS }, debug: 1 });
 
   peer.on('open', (id) => {
-    document.getElementById('my-id').textContent = id;
-    setStatus('Готово — поделись кодом');
+    const url = location.origin + location.pathname + '#' + id;
+    document.getElementById('my-link').textContent = url;
+    setStatus('Готово — поделись ссылкой');
+
+    // Auto-connect if the page was opened with #cc-... in the URL
+    const target = location.hash.replace(/^#/, '').trim().toLowerCase();
+    if (target && target.startsWith('cc-') && target !== id) {
+      autoConnect(target);
+    }
   });
 
   // Incoming data connection (we are the host → we play White)
@@ -738,9 +741,7 @@ function initPeer() {
   });
 }
 
-async function connectToPeer() {
-  const target = document.getElementById('peer-id').value.trim().toLowerCase();
-  if (!target) return;
+async function autoConnect(target) {
   setError('');
   setStatus('Подключение…');
   await getMedia();
@@ -756,11 +757,10 @@ async function connectToPeer() {
 }
 
 // ---------- UI wiring ----------
-document.getElementById('connect-btn').addEventListener('click', connectToPeer);
-document.getElementById('peer-id').addEventListener('keydown', (e) => { if (e.key === 'Enter') connectToPeer(); });
 document.getElementById('copy-btn').addEventListener('click', async () => {
-  const id = document.getElementById('my-id').textContent;
-  try { await navigator.clipboard.writeText(id); document.getElementById('copy-btn').textContent = 'Скопировано!'; setTimeout(() => document.getElementById('copy-btn').textContent = 'Копировать', 1500); } catch(_) {}
+  const url = document.getElementById('my-link').textContent;
+  const btn = document.getElementById('copy-btn');
+  try { await navigator.clipboard.writeText(url); btn.textContent = 'Скопировано!'; setTimeout(() => btn.textContent = 'Копировать ссылку', 1500); } catch(_) {}
 });
 document.getElementById('newgame-btn').addEventListener('click', () => newGame(true));
 document.getElementById('play-again-btn').addEventListener('click', () => newGame(true));
