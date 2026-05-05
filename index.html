@@ -168,9 +168,9 @@
   </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script type="module">
 import { Chess } from 'https://cdn.jsdelivr.net/npm/chess.js@1.0.0/+esm';
+import { joinRoom } from 'https://esm.sh/trystero@0.20.0/torrent';
 
 // ---------- Chess state ----------
 const game = new Chess();
@@ -605,27 +605,13 @@ function playFart() {
   } catch (e) { console.warn('fart failed', e); }
 }
 
-// ---------- WebRTC / PeerJS ----------
-let peer = null;
-let conn = null;
-let mediaCall = null;
+// ---------- Trystero P2P (decentralized signaling) ----------
+let room = null;
+let sendChess = null;
+let opponentId = null;
 let localStream = null;
+let videoSent = false;
 const pendingMessages = [];
-
-function sendToOpponent(msg) {
-  if (!conn) { console.warn('[send] no conn yet, queuing', msg); pendingMessages.push(msg); return; }
-  if (!conn.open) { console.warn('[send] conn not open, queuing', msg); pendingMessages.push(msg); return; }
-  try { conn.send(msg); console.log('[send] →', msg); }
-  catch (e) { console.error('[send] failed', e, msg); pendingMessages.push(msg); }
-}
-
-function flushPending() {
-  while (pendingMessages.length && conn && conn.open) {
-    const m = pendingMessages.shift();
-    try { conn.send(m); console.log('[send-flush] →', m); }
-    catch (e) { console.error('[send-flush] failed', e); pendingMessages.unshift(m); break; }
-  }
-}
 
 const ICE_SERVERS = [
   { urls: 'stun:stun.cloudflare.com:3478' },
@@ -636,8 +622,25 @@ const ICE_SERVERS = [
   { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
 ];
 
+function sendToOpponent(msg) {
+  if (!sendChess || !opponentId) {
+    console.warn('[send] no opponent yet, queuing', msg);
+    pendingMessages.push(msg);
+    return;
+  }
+  try { sendChess(msg, opponentId); console.log('[send] →', msg); }
+  catch (e) { console.error('[send] failed', e, msg); pendingMessages.push(msg); }
+}
+
+function flushPending() {
+  while (pendingMessages.length && sendChess && opponentId) {
+    const m = pendingMessages.shift();
+    try { sendChess(m, opponentId); console.log('[send-flush] →', m); }
+    catch (e) { console.error('[send-flush] failed', e); pendingMessages.unshift(m); break; }
+  }
+}
+
 function makeShortId() {
-  // 6-char human-friendly id
   const chars = 'abcdefghijkmnpqrstuvwxyz23456789';
   let s = '';
   for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
@@ -651,7 +654,8 @@ function setError(text) {
   else el.classList.add('hidden');
 }
 
-async function getMedia() {
+async function tryGetMedia() {
+  // Returns stream or null. Never throws. Game must work even if this returns null.
   if (localStream) return localStream;
   try {
     localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -659,119 +663,111 @@ async function getMedia() {
     document.getElementById('video-placeholder').classList.add('hidden');
     return localStream;
   } catch (e) {
-    setError('Камера/микрофон заблокированы: ' + e.message + '. Шахматная доска работает и без видео.');
+    console.warn('camera/mic unavailable:', e.message);
+    document.getElementById('video-placeholder').textContent = 'Без видео — играем без камеры';
     return null;
   }
 }
 
-function attachConnHandlers() {
-  conn.on('open', () => {
-    setStatus('Подключено');
-    document.getElementById('connect-panel').classList.add('hidden');
-    document.getElementById('game-controls').classList.remove('hidden');
-    // Host (White) authoritatively sets time control and broadcasts it
-    if (myColor === 'w') {
-      timeControlMs = selectedTcMs;
-      sendToOpponent({ type: 'config', timeMs: timeControlMs });
-      startGameClock();
-    }
-    flushPending();
+function handleRemoteData(d) {
+  console.log('[recv] ←', d);
+  if (!d || !d.type) return;
+  if (d.type === 'move') applyRemoteMove(d);
+  else if (d.type === 'config') {
+    timeControlMs = typeof d.timeMs === 'number' ? d.timeMs : 0;
+    startGameClock();
+  }
+  else if (d.type === 'newgame') {
+    game.reset();
+    selected = null; legalTargets = []; lastMove = null;
+    myColor = d.yourColor;
+    if (typeof d.timeMs === 'number') timeControlMs = d.timeMs;
+    document.getElementById('game-over-modal').classList.add('hidden');
+    startGameClock();
     renderBoard();
-  });
-  conn.on('data', (d) => {
-    console.log('[recv] ←', d);
-    if (!d || !d.type) return;
-    if (d.type === 'move') applyRemoteMove(d);
-    else if (d.type === 'config') {
-      timeControlMs = d.timeMs || 0;
-      startGameClock();
-    }
-    else if (d.type === 'newgame') {
-      game.reset();
-      selected = null; legalTargets = []; lastMove = null;
-      myColor = d.yourColor;
-      if (typeof d.timeMs === 'number') timeControlMs = d.timeMs;
-      document.getElementById('game-over-modal').classList.add('hidden');
-      startGameClock();
-      renderBoard();
-    }
-    else if (d.type === 'resign') {
-      stopGameClock();
-      showGameOver('Соперник сдался 🎉', 'Ты выиграл.', false, true);
-    }
-  });
-  conn.on('close', () => { setStatus('Соперник отключился'); });
-  conn.on('error', (e) => { setError('Ошибка соединения: ' + e); });
+  }
+  else if (d.type === 'resign') {
+    stopGameClock();
+    showGameOver('Соперник сдался 🎉', 'Ты выиграл.', false, true);
+  }
 }
 
-function attachMediaCallHandlers() {
-  mediaCall.on('stream', (stream) => {
+function startGame() {
+  setStatus('Подключено');
+  document.getElementById('connect-panel').classList.add('hidden');
+  document.getElementById('game-controls').classList.remove('hidden');
+  if (myColor === 'w') {
+    timeControlMs = selectedTcMs;
+    sendToOpponent({ type: 'config', timeMs: timeControlMs });
+    startGameClock();
+  }
+  flushPending();
+  renderBoard();
+}
+
+async function initRoom() {
+  // Determine room ID and role from URL hash. No hash → host (white). Hash → joiner (black).
+  let roomId = location.hash.replace(/^#/, '').trim().toLowerCase();
+  let isHost = false;
+  if (!roomId || !roomId.startsWith('cc-')) {
+    roomId = makeShortId();
+    history.replaceState(null, '', '#' + roomId);
+    isHost = true;
+  }
+  myColor = isHost ? 'w' : 'b';
+
+  const url = location.origin + location.pathname + '#' + roomId;
+  document.getElementById('my-link').textContent = url;
+  setStatus(isHost ? 'Готово — поделись ссылкой' : 'Подключение к сопернику…');
+
+  // Kick off camera in parallel — game does NOT wait for it.
+  tryGetMedia().then(stream => {
+    if (stream && room && opponentId && !videoSent) {
+      try { room.addStream(stream, opponentId); videoSent = true; }
+      catch (e) { console.warn('addStream failed', e); }
+    }
+  });
+
+  try {
+    room = joinRoom({ appId: 'chesscallfart', rtcConfig: { iceServers: ICE_SERVERS } }, roomId);
+  } catch (e) {
+    console.error('joinRoom failed', e);
+    setError('Не удалось подключиться к сети. Обнови страницу через минуту.');
+    return;
+  }
+
+  const [send, get] = room.makeAction('chess');
+  sendChess = send;
+  get((data, peerId) => handleRemoteData(data));
+
+  room.onPeerJoin(peerId => {
+    console.log('peer joined', peerId);
+    if (opponentId) return; // already paired
+    opponentId = peerId;
+    startGame();
+    // If we already have local media, share it now
+    if (localStream && !videoSent) {
+      try { room.addStream(localStream, peerId); videoSent = true; }
+      catch (e) { console.warn('addStream failed', e); }
+    }
+  });
+
+  room.onPeerLeave(peerId => {
+    console.log('peer left', peerId);
+    if (peerId === opponentId) {
+      opponentId = null;
+      videoSent = false;
+      setStatus('Соперник отключился');
+    }
+  });
+
+  room.onPeerStream((stream, peerId) => {
+    console.log('peer stream from', peerId);
     const v = document.getElementById('remote-video');
     v.srcObject = stream;
     v.play().catch(() => {});
     document.getElementById('video-placeholder').classList.add('hidden');
   });
-  mediaCall.on('close', () => { console.log('media call closed'); });
-  mediaCall.on('error', (e) => console.warn('media error', e));
-}
-
-function initPeer() {
-  setStatus('Получаем твой код…');
-  peer = new Peer(makeShortId(), { config: { iceServers: ICE_SERVERS }, debug: 1 });
-
-  peer.on('open', (id) => {
-    const url = location.origin + location.pathname + '#' + id;
-    document.getElementById('my-link').textContent = url;
-    setStatus('Готово — поделись ссылкой');
-
-    // Auto-connect if the page was opened with #cc-... in the URL
-    const target = location.hash.replace(/^#/, '').trim().toLowerCase();
-    if (target && target.startsWith('cc-') && target !== id) {
-      autoConnect(target);
-    }
-  });
-
-  // Incoming data connection (we are the host → we play White)
-  peer.on('connection', (c) => {
-    if (conn && conn.open) { c.close(); return; }
-    conn = c;
-    myColor = 'w';
-    attachConnHandlers();
-    getMedia(); // start camera now so it's ready when the media call arrives
-  });
-
-  // Incoming media call → answer with our stream
-  peer.on('call', async (c) => {
-    mediaCall = c;
-    attachMediaCallHandlers(); // attach BEFORE any await so we don't miss the 'stream' event
-    const stream = await getMedia();
-    if (stream) c.answer(stream);
-    else c.answer();
-  });
-
-  peer.on('error', (e) => {
-    console.error('peer error', e);
-    if (e.type === 'peer-unavailable') setError('Никто не использует этот код. Проверь его ещё раз.');
-    else if (e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error' || e.type === 'disconnected') {
-      setError('Сервер недоступен. Повтор через 3 с…');
-      setTimeout(() => { try { peer.reconnect(); } catch(_){} }, 3000);
-    } else setError('Ошибка: ' + e.type);
-  });
-}
-
-async function autoConnect(target) {
-  setError('');
-  setStatus('Подключение…');
-  await getMedia();
-
-  conn = peer.connect(target, { reliable: true });
-  myColor = 'b';
-  attachConnHandlers();
-
-  if (localStream) {
-    mediaCall = peer.call(target, localStream);
-    attachMediaCallHandlers();
-  }
 }
 
 // ---------- UI wiring ----------
@@ -783,7 +779,7 @@ document.getElementById('copy-btn').addEventListener('click', async () => {
 document.getElementById('newgame-btn').addEventListener('click', () => newGame(true));
 document.getElementById('play-again-btn').addEventListener('click', () => newGame(true));
 document.getElementById('resign-btn').addEventListener('click', () => {
-  if (!conn || !conn.open) return;
+  if (!opponentId) return;
   if (!confirm('Сдаться?')) return;
   sendToOpponent({ type: 'resign' });
   stopGameClock();
@@ -812,7 +808,7 @@ document.getElementById('custom-minutes').addEventListener('input', (e) => {
 
 // Initialize
 renderBoard();
-initPeer();
+initRoom();
 </script>
 </body>
 </html>
