@@ -293,7 +293,7 @@ function doMove(from, to, promotion = 'q') {
   }
   switchClockOnMove(moverColor, clocks[moverColor]);
   renderBoard();
-  if (conn && conn.open) conn.send({ type: 'move', from, to, promotion, clockMs: clocks[moverColor] });
+  sendToOpponent({ type: 'move', from, to, promotion, clockMs: clocks[moverColor] });
   checkGameEnd();
 }
 
@@ -397,7 +397,7 @@ function newGame(broadcast = true) {
   // Swap colors on rematch
   if (broadcast && myColor) {
     myColor = myColor === 'w' ? 'b' : 'w';
-    if (conn && conn.open) conn.send({ type: 'newgame', yourColor: myColor === 'w' ? 'b' : 'w', timeMs: timeControlMs });
+    sendToOpponent({ type: 'newgame', yourColor: myColor === 'w' ? 'b' : 'w', timeMs: timeControlMs });
   }
   document.getElementById('game-over-modal').classList.add('hidden');
   startGameClock();
@@ -610,6 +610,22 @@ let peer = null;
 let conn = null;
 let mediaCall = null;
 let localStream = null;
+const pendingMessages = [];
+
+function sendToOpponent(msg) {
+  if (!conn) { console.warn('[send] no conn yet, queuing', msg); pendingMessages.push(msg); return; }
+  if (!conn.open) { console.warn('[send] conn not open, queuing', msg); pendingMessages.push(msg); return; }
+  try { conn.send(msg); console.log('[send] →', msg); }
+  catch (e) { console.error('[send] failed', e, msg); pendingMessages.push(msg); }
+}
+
+function flushPending() {
+  while (pendingMessages.length && conn && conn.open) {
+    const m = pendingMessages.shift();
+    try { conn.send(m); console.log('[send-flush] →', m); }
+    catch (e) { console.error('[send-flush] failed', e); pendingMessages.unshift(m); break; }
+  }
+}
 
 const ICE_SERVERS = [
   { urls: 'stun:stun.cloudflare.com:3478' },
@@ -656,12 +672,14 @@ function attachConnHandlers() {
     // Host (White) authoritatively sets time control and broadcasts it
     if (myColor === 'w') {
       timeControlMs = selectedTcMs;
-      conn.send({ type: 'config', timeMs: timeControlMs });
+      sendToOpponent({ type: 'config', timeMs: timeControlMs });
       startGameClock();
     }
+    flushPending();
     renderBoard();
   });
   conn.on('data', (d) => {
+    console.log('[recv] ←', d);
     if (!d || !d.type) return;
     if (d.type === 'move') applyRemoteMove(d);
     else if (d.type === 'config') {
@@ -767,7 +785,7 @@ document.getElementById('play-again-btn').addEventListener('click', () => newGam
 document.getElementById('resign-btn').addEventListener('click', () => {
   if (!conn || !conn.open) return;
   if (!confirm('Сдаться?')) return;
-  conn.send({ type: 'resign' });
+  sendToOpponent({ type: 'resign' });
   stopGameClock();
   showGameOver('Ты сдался 💨', 'В следующий раз повезёт.', true);
 });
